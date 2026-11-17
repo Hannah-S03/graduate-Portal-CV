@@ -6,9 +6,7 @@ window.SITE_LINKS = {
   categories: ["Key tools", "People and HR", "IT and tools", "Learning", "Finance", "Company"],
   items: [
     { id: "customer-system", name: "Customer system", category: "Key tools", description: "Sample link: sign in to the customer records system.", url: "https://example.com/customer-system" },
-    { id: "payslips", name: "Payslips", category: "People and HR", description: "Sample link: view your payslips.", url: "https://example.com/payslips" },
     { id: "hr-portal", name: "HR portal", category: "People and HR", description: "Sample link: holiday requests and personal details.", url: "https://example.com/hr" },
-    { id: "expenses", name: "Expenses", category: "Finance", description: "Sample link: claim travel and other expenses.", url: "https://example.com/expenses" },
     { id: "learning-platform", name: "Learning platform", category: "Learning", description: "Sample link: online courses and training.", url: "https://example.com/learning" }
   ]
 };
