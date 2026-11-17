@@ -1,0 +1,835 @@
+// Shared helpers for the hub sections: forms, status messages, progress maths and reminders.
+(function () {
+  "use strict";
+  var el = window.SiteUtil.el;
+  var S = window.HubStore;
+  var counter = 0;
+  function nextId(p) { counter++; return (p || "f-") + counter; }
+
+  var Hub = { el: el, store: S };
+
+  Hub.slug = function (s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); };
+
+  // The 11 skills from the 12-week overview, used for goals, milestones, learning and achievements.
+  Hub.skills = function () {
+    var out = [];
+    ((window.SITE_OVERVIEW || {}).groups || []).forEach(function (g) {
+      (g.skills || []).forEach(function (s) { out.push({ id: Hub.slug(s.name), name: s.name, group: g.title }); });
+    });
+    return out;
+  };
+  Hub.skillName = function (id) {
+    var f = Hub.skills().filter(function (s) { return s.id === id; })[0];
+    return f ? f.name : id;
+  };
+
+  Hub.fmtDate = function (str) {
+    if (!str) return "";
+    return S.parseDate(str).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  };
+  Hub.plural = function (n, one, many) { return n + " " + (n === 1 ? one : many); };
+
+  Hub.progress = function (pct, label) {
+    pct = Math.max(0, Math.min(100, Math.round(pct)));
+    return el("div", { class: "bar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct), "aria-label": label || "Progress" }, [
+      el("div", { class: "bar-fill", style: "width:" + pct + "%" })
+    ]);
+  };
+  Hub.badge = function (text, kind) { return el("span", { class: "badge badge-" + (kind || "info"), text: text }); };
+
+  // A polite status line (screen readers announce changes). Use status.say(message, isError).
+  Hub.status = function () {
+    var p = el("p", { class: "status", role: "status", "aria-live": "polite" });
+    p.say = function (msg, isErr) { p.textContent = msg; p.className = "status " + (isErr ? "status-error" : "status-ok"); };
+    return p;
+  };
+  // Saves and reports the result. Returns true if the browser accepted it.
+  Hub.save = function (status, okMessage) {
+    var ok = S.save();
+    if (status) {
+      if (ok) status.say(okMessage || "Saved.", false);
+      else status.say("Your browser would not save this, so it will be lost when you leave the page.", true);
+    }
+    return ok;
+  };
+
+  // Warnings shown at the top of hub pages when saving is off or stored data had to be reset.
+  Hub.notices = function (t) {
+    if (!S.available) {
+      t.appendChild(el("div", { class: "notice", role: "alert" }, [
+        el("strong", { text: "Saving is turned off in this browser. " }),
+        "You can look around, but nothing you enter will be kept. Try a normal (not private) window, or check your browser's site data settings."
+      ]));
+    }
+    if (S.recovered) {
+      t.appendChild(el("div", { class: "notice", role: "alert" }, [
+        el("strong", { text: "We could not read your saved information. " }),
+        "A copy of it was kept in this browser and you are starting fresh. Contact the programme team if you need help recovering it."
+      ]));
+    }
+  };
+  Hub.needStart = function () {
+    return el("div", { class: "notice", role: "note" }, [
+      "Add your placement start date on ", el("a", { href: "index.html", text: "My profile" }), " to see dates, reminders and your week number."
+    ]);
+  };
+  Hub.focus = function (node) {
+    if (!node) return;
+    if (!node.hasAttribute("tabindex") && !/^(A|BUTTON|INPUT|SELECT|TEXTAREA)$/.test(node.tagName)) node.setAttribute("tabindex", "-1");
+    node.focus();
+  };
+
+  // ----- form fields -----
+  // def: { name, label, type: text|email|url|date|textarea|select|range|checks, required, hint, options, rows, maxlength, min, max, step, validate }
+  Hub.field = function (def, value) {
+    var id = nextId("f-"), hintId = id + "-hint", errId = id + "-err";
+    var wrap = el("div", { class: "field" });
+    var input, getter, setter, focusTarget;
+    var type = def.type || "text";
+    var labelText = def.label + (def.required || type === "range" || type === "checks" ? "" : " (optional)");
+
+    if (type === "checks") {
+      var fs = el("fieldset", { class: "checks", "aria-describedby": errId });
+      fs.appendChild(el("legend", { text: labelText }));
+      var boxes = [];
+      (def.options || []).forEach(function (o) {
+        var cid = nextId("c-");
+        var cb = el("input", { type: "checkbox", id: cid, value: o.value });
+        boxes.push(cb);
+        fs.appendChild(el("div", { class: "check" }, [cb, el("label", { for: cid, text: o.label })]));
+      });
+      wrap.appendChild(fs);
+      getter = function () { return boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; }); };
+      setter = function (v) { var a = Array.isArray(v) ? v : []; boxes.forEach(function (b) { b.checked = a.indexOf(b.value) !== -1; }); };
+      focusTarget = function () { if (boxes[0]) boxes[0].focus(); };
+      input = boxes[0];
+    } else {
+      wrap.appendChild(el("label", { for: id, text: labelText }));
+      if (def.hint) wrap.appendChild(el("p", { class: "hint", id: hintId, text: def.hint }));
+      if (type === "textarea") {
+        input = el("textarea", { id: id, rows: String(def.rows || 3), maxlength: String(def.maxlength || 2000) });
+        // autogrow: the box gets taller as the person types, so long text never needs an inner scroll (the resize handle still works)
+        if (def.autogrow) {
+          input.classList.add("autogrow");
+          input._grow = function () { if (!input.scrollHeight) return; input.style.height = "auto"; input.style.height = (input.scrollHeight + 2) + "px"; };
+          input.addEventListener("input", input._grow);
+          window.setTimeout(input._grow, 0);
+        }
+      } else if (type === "select") {
+        input = el("select", { id: id });
+        (def.options || []).forEach(function (o) { input.appendChild(el("option", { value: o.value, text: o.label })); });
+      } else if (type === "range") {
+        input = el("input", { type: "range", id: id, min: String(def.min || 0), max: String(def.max || 100), step: String(def.step || 5) });
+      } else {
+        input = el("input", { type: type, id: id, maxlength: String(def.maxlength || 200), autocomplete: def.autocomplete || "off" });
+        if (def.placeholder) input.setAttribute("placeholder", def.placeholder);
+      }
+      if (def.required) input.setAttribute("aria-required", "true");
+      var out = null;
+      if (type === "range") {
+        out = el("output", { for: id, class: "range-out" });
+        var syncOut = function () { out.textContent = input.value + "%"; };
+        input.addEventListener("input", syncOut);
+        var row = el("div", { class: "range-row" }, [input, out]);
+        wrap.appendChild(row);
+        setTimeout(syncOut, 0);
+        input._sync = syncOut;
+      } else wrap.appendChild(input);
+      getter = function () { return type === "range" ? Number(input.value) : input.value.trim(); };
+      setter = function (v) { input.value = v === undefined || v === null ? "" : String(v); if (input._sync) input._sync(); if (input._grow) input._grow(); };
+      focusTarget = function () { input.focus(); };
+    }
+    var err = el("p", { class: "field-error", id: errId, role: "alert" });
+    wrap.appendChild(err);
+    var describedBy = (def.hint ? hintId + " " : "") + errId;
+    if (type !== "checks") input.setAttribute("aria-describedby", describedBy);
+
+    if (value !== undefined) setter(value); else if (def.default !== undefined) setter(def.default);
+
+    var f = {
+      def: def, wrap: wrap, input: input, get: getter, set: setter, focus: focusTarget,
+      setError: function (m) {
+        err.textContent = m || "";
+        if (type !== "checks" && input) { if (m) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid"); }
+      },
+      validate: function (v) {
+        var empty = Array.isArray(v) ? v.length === 0 : (v === "" || v === null || v === undefined);
+        if (def.required && empty) return def.label + " is required.";
+        if (empty) return "";
+        if (type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return "Enter a valid email address.";
+        if (type === "url" && !S.safeUrl(v)) return "Enter a full web address starting with http:// or https://";
+        if (type === "date" && !S.dateStr(v)) return "Enter a valid date.";
+        if (type === "time" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return "Enter a valid time, for example 14:30.";
+        if (def.validate) return def.validate(v) || "";
+        return "";
+      }
+    };
+    return f;
+  };
+
+  // opts: { fields, values, submitLabel, cancelLabel, onSubmit(values) -> {name: message}|undefined, onCancel }
+  Hub.form = function (opts) {
+    var form = el("form", { class: "hub-form" + (opts.extraClass ? " " + opts.extraClass : ""), novalidate: "novalidate" });
+    var fields = opts.fields.map(function (d) { return Hub.field(d, opts.values ? opts.values[d.name] : undefined); });
+    fields.forEach(function (f) { form.appendChild(f.wrap); });
+    var row = el("div", { class: "row" });
+    row.appendChild(el("button", { type: "submit", class: "btn", text: opts.submitLabel || "Save" }));
+    if (opts.onCancel) {
+      var c = el("button", { type: "button", class: "btn secondary", text: opts.cancelLabel || "Cancel" });
+      c.addEventListener("click", opts.onCancel);
+      row.appendChild(c);
+    }
+    form.appendChild(row);
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var values = {}, first = null;
+      fields.forEach(function (f) {
+        var v = f.get(); values[f.def.name] = v;
+        var msg = f.validate(v); f.setError(msg);
+        if (msg && !first) first = f;
+      });
+      if (first) { first.focus(); return; }
+      var res = opts.onSubmit(values);
+      if (res) {
+        fields.forEach(function (f) { if (res[f.def.name]) { f.setError(res[f.def.name]); if (!first) first = f; } });
+        if (first) first.focus();
+      }
+    });
+    form.fields = fields;
+    return form;
+  };
+
+  // A "⋯" button that reveals a small panel of actions (a disclosure, not an ARIA menu). Escape or a click outside closes it.
+  // Returns { wrap, panel, button, close }: put the action buttons inside panel.
+  var openMenu = null;
+  function closeMenu(refocus) {
+    var m = openMenu; openMenu = null;
+    if (!m) return;
+    m.button.setAttribute("aria-expanded", "false"); m.panel.hidden = true;
+    if (refocus && document.body.contains(m.button)) m.button.focus();
+  }
+  document.addEventListener("click", function (e) { if (openMenu && document.contains(e.target) && !openMenu.wrap.contains(e.target)) closeMenu(false); });
+  Hub.moreMenu = function (label) {
+    var id = nextId("mm-");
+    var wrap = el("span", { class: "more-menu" });
+    var button = el("button", { type: "button", class: "btn small secondary more-btn", "aria-expanded": "false", "aria-controls": id, "aria-label": label, text: "\u22EF" });
+    var panel = el("div", { class: "more-panel", id: id });
+    panel.hidden = true;
+    var menu = { wrap: wrap, panel: panel, button: button, close: closeMenu };
+    button.addEventListener("click", function () {
+      var wasOpen = openMenu === menu;
+      closeMenu(false);
+      if (!wasOpen) { openMenu = menu; button.setAttribute("aria-expanded", "true"); panel.hidden = false; }
+    });
+    wrap.addEventListener("keydown", function (e) { if (e.key === "Escape" && openMenu === menu) { e.stopPropagation(); closeMenu(true); } });
+    wrap.appendChild(button); wrap.appendChild(panel);
+    return menu;
+  };
+
+  // Pages made of several <section id="..."> blocks (Company hub, Meetings): each heading becomes a fold-away button.
+  // The first section starts open; the others start folded on phones. Links to "#section" open that section.
+  Hub.foldSections = function () {
+    var sections = Array.prototype.slice.call(document.querySelectorAll("main section[id]"));
+    sections.forEach(function (sec, i) {
+      sec.heading = sec.querySelector("h2");
+      if (!sec.heading) return;
+      sec.classList.add("foldable");
+      Hub.collapsible(sec, { start: i === 0 ? "open" : "closed-on-phone" });
+    });
+    function openFor(id) {
+      var sec = document.getElementById(id), btn = sec && sec.querySelector(".panel-toggle");
+      if (btn && btn.getAttribute("aria-expanded") === "false") btn.click();
+    }
+    document.querySelectorAll(".section-nav a").forEach(function (a) {
+      a.addEventListener("click", function () { openFor(a.getAttribute("href").slice(1)); });
+    });
+    if (location.hash) openFor(location.hash.slice(1));
+  };
+
+  // ----- celebrations -----
+  // A small message at the bottom of the screen (read out politely by screen readers) and an optional gold pulse on a card.
+  // Each celebration is shown once: Hub.celebrateOnce("goal:abc", "Goal complete", "You finished ...", cardNode).
+  function toastArea() {
+    var a = document.getElementById("toast-area");
+    if (!a) { a = el("div", { class: "toast-area", id: "toast-area", role: "status", "aria-live": "polite" }); document.body.appendChild(a); }
+    return a;
+  }
+  Hub.celebrate = function (title, text, node) {
+    var toast = el("div", { class: "toast" });
+    var msg = el("div", {}, [el("strong", { text: title }), el("span", { text: text })]);
+    var close = el("button", { type: "button", class: "btn small secondary", text: "Dismiss" });
+    function gone() { if (toast.parentNode) toast.parentNode.removeChild(toast); }
+    close.addEventListener("click", gone);
+    toast.appendChild(msg); toast.appendChild(close);
+    toastArea().appendChild(toast);
+    window.setTimeout(gone, 9000);
+    if (node) { node.classList.remove("celebrate-pulse"); void node.offsetWidth; node.classList.add("celebrate-pulse"); window.setTimeout(function () { node.classList.remove("celebrate-pulse"); }, 3600); }
+    return toast;
+  };
+  Hub.celebrateOnce = function (key, title, text, node) {
+    if (S.state.celebrated[key]) return null;
+    S.state.celebrated[key] = true; S.save();
+    return Hub.celebrate(title, text, node);
+  };
+
+  // A delete (or other risky) button that asks "Are you sure?" on the page. opts: { label, ariaLabel, message, confirmLabel, onConfirm }
+  Hub.confirmButton = function (opts) {
+    var holder = el("span", { class: "confirm-holder" });
+    var btn = el("button", { type: "button", class: "btn small danger", text: opts.label, "aria-label": opts.ariaLabel || opts.label });
+    function showBtn() { holder.textContent = ""; holder.appendChild(btn); }
+    btn.addEventListener("click", function () {
+      holder.textContent = "";
+      var yes = el("button", { type: "button", class: "btn small danger", text: opts.confirmLabel || "Yes, delete" });
+      var no = el("button", { type: "button", class: "btn small secondary", text: "Cancel" });
+      yes.addEventListener("click", opts.onConfirm);
+      no.addEventListener("click", function () { showBtn(); btn.focus(); });
+      holder.appendChild(el("span", { class: "confirm-text", text: opts.message || "Are you sure?" }));
+      holder.appendChild(yes); holder.appendChild(no);
+      yes.focus();
+    });
+    showBtn();
+    return holder;
+  };
+
+  Hub.download = function (name, text, mime) {
+    var blob = new Blob([text], { type: mime || "text/plain" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  };
+
+  Hub.link = function (url, text, cls) {
+    return el("a", { href: url, target: "_blank", rel: "noopener noreferrer", class: cls || false, text: text });
+  };
+
+  // A goal is made of tasks. With tasks, progress is the share completed; with none it falls back to the old saved percentage.
+  Hub.taskCounts = function (g) {
+    var tasks = g.tasks || [];
+    return { total: tasks.length, completed: tasks.filter(function (t) { return t.status === "completed"; }).length, inprogress: tasks.filter(function (t) { return t.status === "inprogress"; }).length };
+  };
+  Hub.goalProgress = function (g) { var c = Hub.taskCounts(g); return c.total ? Math.round((c.completed / c.total) * 100) : g.progress; };
+  Hub.goalStatus = function (g) {
+    var c = Hub.taskCounts(g);
+    if (!c.total) return g.progress >= 100 ? "done" : g.progress > 0 ? "inprogress" : "notstarted";
+    return c.completed === c.total ? "done" : c.completed || c.inprogress ? "inprogress" : "notstarted";
+  };
+  Hub.taskStatusLabel = { notstarted: "Not started", inprogress: "In progress", completed: "Completed" };
+  Hub.goalStatusLabel = { notstarted: "Not started", inprogress: "In progress", done: "Done" };
+
+  // ----- training, progress and reminders -----
+  Hub.training = function () { return (window.SITE_LEARNING || {}).training || []; };
+  Hub.trainingDue = function (t) {
+    var sd = S.state.profile.startDate;
+    return sd ? S.addDays(sd, t.dueDays) : "";
+  };
+  Hub.trainingStatus = function (t) { var r = S.state.learning.training[t.id]; return r ? r.status : "notstarted"; };
+  Hub.dueBadge = function (due, done) {
+    if (done) return { text: "Done", kind: "ok" };
+    if (!due) return { text: "No date yet", kind: "info" };
+    var d = S.daysBetween(S.today(), due);
+    if (d < 0) return { text: "Overdue by " + Hub.plural(-d, "day", "days"), kind: "danger" };
+    if (d === 0) return { text: "Due today", kind: "warn" };
+    if (d <= 7) return { text: "Due in " + Hub.plural(d, "day", "days"), kind: "warn" };
+    return { text: "Due " + Hub.fmtDate(due), kind: "info" };
+  };
+
+  // Overall progress: the average of the parts that have something in them (goals, milestones, required training).
+  Hub.progressSummary = function () {
+    var st = S.state, parts = [];
+    var goalsPct = st.goals.length ? st.goals.reduce(function (a, g) { return a + Hub.goalProgress(g); }, 0) / st.goals.length : null;
+    var achieved = st.milestones.filter(function (m) { return m.status === "achieved"; }).length;
+    var msPct = st.milestones.length ? (achieved / st.milestones.length) * 100 : null;
+    var tr = Hub.training();
+    var trDone = tr.filter(function (t) { return Hub.trainingStatus(t) === "complete"; }).length;
+    var trPct = tr.length ? (trDone / tr.length) * 100 : null;
+    parts.push({ key: "goals", label: "Goals", pct: goalsPct, detail: st.goals.length ? Hub.plural(st.goals.length, "goal", "goals") + ", average progress" : "Nothing added yet", href: "journey.html" });
+    parts.push({ key: "milestones", label: "Milestones", pct: msPct, detail: st.milestones.length ? achieved + " of " + st.milestones.length + " achieved" : "Nothing added yet", href: "development.html" });
+    parts.push({ key: "training", label: "Required training", pct: trPct, detail: tr.length ? trDone + " of " + tr.length + " complete" : ((window.SITE_LEARNING || {}).trainingNote || "Nothing added yet"), href: "learning.html" });
+    var have = parts.filter(function (p) { return p.pct !== null; });
+    var overall = have.length ? Math.round(have.reduce(function (a, p) { return a + p.pct; }, 0) / have.length) : null;
+    return { parts: parts, overall: overall };
+  };
+
+  // Things that need attention, most urgent first.
+  Hub.reminders = function () {
+    var st = S.state, out = [], today = S.today();
+    var pl = S.programme();
+    Hub.training().forEach(function (t) {
+      if (Hub.trainingStatus(t) === "complete") return;
+      var due = Hub.trainingDue(t); if (!due) return;
+      var d = S.daysBetween(today, due);
+      if (d < 0) out.push({ level: 0, kind: "danger", text: t.title + " training is overdue by " + Hub.plural(-d, "day", "days") + ".", href: "learning.html" });
+      else if (d <= 7) out.push({ level: 1, kind: "warn", text: t.title + " training is due " + (d === 0 ? "today" : "in " + Hub.plural(d, "day", "days")) + ".", href: "learning.html" });
+    });
+    st.goals.forEach(function (g) {
+      if (Hub.goalStatus(g) === "done" || !g.target) return;
+      var d = S.daysBetween(today, g.target);
+      if (d < 0) out.push({ level: 0, kind: "danger", text: "Goal “" + g.title + "” was due " + Hub.fmtDate(g.target) + ".", href: "journey.html" });
+      else if (d <= 14) out.push({ level: 2, kind: "warn", text: "Goal “" + g.title + "” is due " + (d === 0 ? "today" : "in " + Hub.plural(d, "day", "days")) + ".", href: "journey.html" });
+    });
+    st.milestones.forEach(function (m) {
+      if (m.status === "achieved" || !m.date) return;
+      var d = S.daysBetween(today, m.date);
+      if (d < 0) out.push({ level: 0, kind: "danger", text: "Milestone “" + m.title + "” is past its date (" + Hub.fmtDate(m.date) + ").", href: "development.html" });
+      else if (d <= 14) out.push({ level: 2, kind: "warn", text: "Milestone “" + m.title + "” is on " + Hub.fmtDate(m.date) + ".", href: "development.html" });
+    });
+    Hub.plannedLearning().forEach(function (p) {
+      if (p.status === "completed" || !p.planned) return;
+      var d = S.daysBetween(today, p.planned);
+      if (d >= 0 && d <= 7) out.push({ level: 2, kind: "warn", text: "Planned learning \u201C" + p.title + "\u201D is " + (d === 0 ? "today" : "in " + Hub.plural(d, "day", "days")) + ".", href: "learning.html" });
+    });
+    st.calendar.forEach(function (c) {
+      var d = S.daysBetween(today, c.date);
+      if (d === 0 || d === 1) out.push({ level: 1, kind: "warn", text: "Event: " + c.title + " is " + (d === 0 ? "today" : "tomorrow") + (c.time ? " at " + c.time : "") + ".", href: "index.html#calendar" });
+    });
+    st.meetings.forEach(function (m) {
+      if (!m.next) return;
+      var d = S.daysBetween(today, m.next);
+      if (d === 0 || d === 1) out.push({ level: 1, kind: "warn", text: "Your 1:1" + (m.withWho ? " with " + m.withWho : "") + " is " + (d === 0 ? "today" : "tomorrow") + ". Check your agenda.", href: "meetings.html" });
+    });
+    if (pl.status === "during" && !st.reflections[String(pl.week)]) {
+      out.push({ level: 3, kind: "info", text: "Write your reflection for week " + pl.week + ".", href: "reflection.html" });
+    }
+    out.sort(function (a, b) { return a.level - b.level; });
+    return out;
+  };
+
+  // Makes a panel's heading a button that shows or hides the rest of the panel. start: "open" (default),
+  // "closed", or "closed-on-phone" (open on a laptop, folded on a small screen to save scrolling).
+  Hub.collapsible = function (sec, opts) {
+    opts = opts || {};
+    var h = sec.heading, body = el("div", { class: "panel-body", id: nextId("pb-") });
+    while (h.nextSibling) body.appendChild(h.nextSibling);
+    sec.appendChild(body);
+    var btn = el("button", { type: "button", class: "panel-toggle", "aria-controls": body.id });
+    btn.appendChild(el("span", { text: h.textContent }));
+    btn.appendChild(el("span", { class: "chev", "aria-hidden": "true" }));
+    h.textContent = ""; h.appendChild(btn);
+    var line = null;
+    if (opts.summary) {
+      line = el("div", { class: "panel-summary" });
+      var text = el("p", { class: "muted" }), open = el("button", { type: "button", class: "btn small secondary", text: opts.openLabel || "Open" });
+      open.addEventListener("click", function () { set(true); var first = body.querySelector("select, input, textarea, button"); if (first) first.focus(); });
+      line.appendChild(text); line.appendChild(open); line.text = text;
+      sec.appendChild(line);
+    }
+    function set(open) {
+      btn.setAttribute("aria-expanded", String(open)); body.hidden = !open; sec.classList.toggle("is-collapsed", !open);
+      if (line) { line.hidden = open; if (!open) line.text.textContent = opts.summary(); }
+    }
+    if (line) Hub.onChange("summary-line", function () { if (!line.hidden) line.text.textContent = opts.summary(); });
+    var phone = !!(window.matchMedia && window.matchMedia("(max-width: 700px)").matches), start = opts.start || "open";
+    set(start === "open" ? true : start === "closed" ? false : !phone);
+    btn.addEventListener("click", function () { set(body.hidden); });
+    return sec;
+  };
+
+  // Library of company links (from src/data/links.js) plus the graduate's own links.
+  Hub.allLinks = function () {
+    var base = ((window.SITE_LINKS || {}).items || []).map(function (l) { return { id: l.id, name: l.name, category: l.category, description: l.description, url: S.safeUrl(l.url), custom: false }; });
+    var mine = S.state.links.custom.map(function (l) { return { id: l.id, name: l.name, category: l.category || "My links", description: l.description, url: l.url, custom: true }; });
+    return base.concat(mine);
+  };
+  Hub.panel = function (title, cls) {
+    var sec = el("section", { class: "panel" + (cls ? " " + cls : "") });
+    var h = el("h2", { text: title });
+    sec.appendChild(h);
+    sec.heading = h;
+    return sec;
+  };
+
+  // Saved or custom learning that has a planned date, with its title.
+  Hub.plannedLearning = function () {
+    var st = S.state, cat = ((window.SITE_LEARNING || {}).catalogue || []);
+    return Object.keys(st.learning.saved).map(function (id) {
+      var rec = st.learning.saved[id], item = cat.filter(function (c) { return c.id === id; })[0];
+      return item ? { title: item.title, planned: rec.planned, status: rec.status } : null;
+    }).filter(Boolean).concat(st.learning.custom.map(function (c) { return { title: c.title, planned: c.planned, status: c.status }; }));
+  };
+
+  // The sentence under the progress bar. Says where the graduate is now and how long is left, and changes as the programme goes on:
+  // getting started, a quarter, half way, three quarters, the final week, complete. Returns { key, text } or null before the programme starts.
+  Hub.programmeStage = function (pl) {
+    if (pl.status === "after") return { key: "complete", text: "Programme complete. Well done on finishing the whole scheme!" };
+    if (pl.status !== "during") return null;
+    var left = pl.totalWeeks - pl.week, togo = left === 1 ? "1 week to go" : left + " weeks to go", p = pl.pct;
+    if (left === 0) return { key: "final", text: "This is your final week. Finish strong!" };
+    if (p >= 75) return { key: "q3", text: "You are " + (p === 75 ? "three quarters" : "more than three quarters") + " of the way through the programme. " + togo + "." };
+    if (p >= 50) return { key: "half", text: "You are " + (p === 50 ? "half way" : "more than half way") + " through the programme. " + togo + "." };
+    if (p >= 25) return { key: "q1", text: "You are " + (p === 25 ? "a quarter" : "more than a quarter") + " of the way through the programme. " + togo + "." };
+    return { key: "start", text: "You are getting started. " + togo + "." };
+  };
+
+  // The week the weekly goals and progress update belong to: this week during the programme, week 1 before it, the last week after it.
+  Hub.currentWeek = function () {
+    var pl = S.programme();
+    return { week: pl.status === "during" ? pl.week : pl.status === "after" ? pl.totalWeeks : 1, pl: pl };
+  };
+
+  // Tells other home page panels to refresh after one panel saves something (the panel that saved is skipped,
+  // so it keeps keyboard focus).
+  var listeners = [];
+  Hub.onChange = function (owner, fn) { listeners.push({ owner: owner, fn: fn }); };
+  Hub.clearListeners = function () { listeners = []; };
+  Hub.changed = function (owner) { listeners.slice().forEach(function (l) { if (l.owner !== owner) l.fn(); }); };
+
+  // "Today", "Tomorrow", "In 3 days", otherwise "Thu 15 Oct".
+  Hub.dayLabel = function (date) {
+    var d = S.daysBetween(S.today(), date);
+    if (d === 0) return "Today";
+    if (d === 1) return "Tomorrow";
+    if (d > 1 && d < 7) return "In " + d + " days";
+    return S.parseDate(date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  };
+
+  // Everything coming up (today or later), soonest first: the graduate's own events and reminders,
+  // training due dates, goal target dates, planned milestones and planned learning. ics: true = can go in a calendar file.
+  // opts.all = true also includes dates in the past (used by the month view); finished items are still left out.
+  Hub.agenda = function (limit, opts) {
+    var st = S.state, today = S.today(), items = [], all = !!(opts && opts.all);
+    function inRange(d) { return all || d >= today; }
+    st.meetings.forEach(function (m) {
+      if (m.next && inRange(m.next)) items.push({ id: "mt-" + m.id, kind: "1:1 meeting", title: "1:1" + (m.withWho ? " with " + m.withWho : ""), date: m.next, time: "", href: "meetings.html", ics: true, desc: m.title || "" });
+    });
+    st.calendar.forEach(function (c) {
+      if (inRange(c.date)) items.push({ id: c.id, kind: c.setBy === "programme" ? "Programme event" : "My event", title: c.title, date: c.date, time: c.time, where: c.where, desc: c.note, ics: true, mine: c.setBy !== "programme", programme: c.setBy === "programme" });
+    });
+    Hub.training().forEach(function (t) {
+      if (Hub.trainingStatus(t) === "complete") return;
+      var due = Hub.trainingDue(t);
+      if (due && inRange(due)) items.push({ id: "tr-" + t.id, kind: "Training due", title: t.title + " training", date: due, time: "", href: "learning.html" });
+    });
+    st.goals.forEach(function (g) { if (Hub.goalStatus(g) !== "done" && g.target && inRange(g.target)) items.push({ id: "g-" + g.id, kind: "Goal due", title: g.title, date: g.target, time: "", href: "journey.html" }); });
+    st.milestones.forEach(function (m) { if (m.status !== "achieved" && m.date && inRange(m.date)) items.push({ id: "m-" + m.id, kind: "Milestone", title: m.title, date: m.date, time: "", href: "development.html" }); });
+    Hub.plannedLearning().forEach(function (p, i) { if (p.status !== "completed" && p.planned && inRange(p.planned)) items.push({ id: "l-" + i, kind: "Learning", title: p.title, date: p.planned, time: "", href: "learning.html" }); });
+    items.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.time || "") < (b.time || "") ? -1 : (a.time || "") > (b.time || "") ? 1 : a.title < b.title ? -1 : 1; });
+    return limit ? items.slice(0, limit) : items;
+  };
+
+  // ----- the week ahead (used by the AI agent button on My profile) -----
+  var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // "Mon 12 Oct" (always in this form, whatever the browser language, so the text and the email subject are predictable)
+  Hub.shortDate = function (date) { var d = S.parseDate(date); return DAY_NAMES[d.getDay()] + " " + d.getDate() + " " + MONTH_NAMES[d.getMonth()]; };
+  var DUE_KINDS = { "Training due": 1, "Goal due": 1, "Milestone": 1 };
+
+  // The Monday-to-Sunday week that contains dateStr (default today); on a Saturday or Sunday it is the coming week.
+  // Rules only, nothing is sent anywhere: it reads the hub's own saved data.
+  // Returns { start, end, rangeLabel, isNextWeek, programmeWeek (null or {week,total}), priorities, days, deadlines, overdue, counts }.
+  Hub.weekAhead = function (dateStr) {
+    var st = S.state, ref = dateStr || S.today(), dow = S.parseDate(ref).getDay();
+    var start = S.addDays(ref, dow === 0 ? 1 : dow === 6 ? 2 : 1 - dow), end = S.addDays(start, 6);
+    var today = S.today(), pl = S.programme(), pw = null;
+    if (pl.startDate) {
+      var wk = S.weekOf(pl.startDate, start);
+      if (wk >= 1 && wk <= pl.totalWeeks) pw = { week: wk, total: pl.totalWeeks };
+      else if (wk < 1 && S.weekOf(pl.startDate, end) >= 1) pw = { week: 1, total: pl.totalWeeks };
+    }
+    var all = Hub.agenda(0, { all: true }), deadlines = [], overdue = [], days = [], training = { overdue: 0, dueThisWeek: 0 };
+    for (var i = 0; i < 7; i++) days.push({ date: S.addDays(start, i), label: Hub.shortDate(S.addDays(start, i)), items: [] });
+    all.forEach(function (a) {
+      // required training modules are not priorities: they are only counted, and mentioned in one line
+      if (a.kind === "Training due") { if (a.date < today) training.overdue++; else if (a.date >= start && a.date <= end) training.dueThisWeek++; return; }
+      if (DUE_KINDS[a.kind]) {
+        if (a.date < today) overdue.push(a);
+        else if (a.date >= start && a.date <= end) deadlines.push(a);
+      } else if (a.date >= start && a.date <= end) {
+        days[S.daysBetween(start, a.date)].items.push(a);
+      }
+    });
+    overdue.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+
+    // Priorities are tasks first: tasks in progress and the next task for each open goal, the goals that are due soonest first;
+    // then goals that are due or overdue but have no tasks yet, milestones, weekly goals, actions from 1:1s and the reflection.
+    var pri = [], inProgress = 0, cand = [], nudges = [];
+    function add(title, reason, href) { pri.push({ title: title, reason: reason, href: href }); }
+    function when(date) { return !date ? "no due date" : date < today ? "overdue (was due " + Hub.shortDate(date) + ")" : "due " + Hub.shortDate(date); }
+    st.goals.forEach(function (g) {
+      if (Hub.goalStatus(g) === "done") return;
+      var tasks = g.tasks || [], key = g.target || "9999-12-31";
+      tasks.forEach(function (t, i) { if (t.status === "inprogress") { inProgress++; cand.push({ key: key, sub: 0, n: cand.length, p: { title: t.text, reason: "In progress \u00B7 goal: " + g.title + " \u00B7 " + when(g.target), href: "journey.html" } }); } });
+      var next = tasks.filter(function (t) { return t.status === "notstarted"; })[0];
+      if (next) cand.push({ key: key, sub: 1, n: cand.length, p: { title: next.text, reason: "Next task \u00B7 goal: " + g.title + " \u00B7 " + when(g.target), href: "journey.html" } });
+      if (!tasks.length && g.target && g.target <= end) nudges.push({ key: key, p: { title: "Add tasks to goal \u201C" + g.title + "\u201D", reason: g.target < today ? "Overdue: was due " + Hub.shortDate(g.target) : "Due " + Hub.shortDate(g.target), href: "journey.html" } });
+    });
+    cand.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : a.sub - b.sub || a.n - b.n; });
+    cand.forEach(function (c) { pri.push(c.p); });
+    nudges.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; }).forEach(function (n) { pri.push(n.p); });
+    overdue.filter(function (a) { return a.kind === "Milestone"; }).forEach(function (a) { add(a.title, "Overdue: was due " + Hub.shortDate(a.date), a.href); });
+    deadlines.filter(function (a) { return a.kind === "Milestone"; }).forEach(function (a) { add(a.title, "Milestone " + Hub.shortDate(a.date), a.href); });
+    if (pw) (st.weeklyGoals[String(pw.week)] || []).forEach(function (g) { if (!g.done) add(g.text, "Weekly goal for week " + pw.week, "index.html"); });
+    st.meetings.forEach(function (m) {
+      (m.actions || []).forEach(function (a) { if (!a.done) add(a.text, "Action from your 1:1" + (m.withWho ? " with " + m.withWho : ""), "meetings.html"); });
+    });
+    if (pw && ref >= start && pl.status === "during" && !st.reflections[String(pw.week)]) add("Write your reflection for week " + pw.week, "Takes a few minutes", "reflection.html");
+
+    var meetings = 0; days.forEach(function (d) { meetings += d.items.filter(function (x) { return x.kind !== "Learning"; }).length; });
+    return {
+      start: start, end: end, isNextWeek: ref < start, programmeWeek: pw,
+      rangeLabel: S.parseDate(start).getMonth() === S.parseDate(end).getMonth() ? DAY_NAMES[S.parseDate(start).getDay()] + " " + S.parseDate(start).getDate() + " to " + Hub.shortDate(end) : Hub.shortDate(start) + " to " + Hub.shortDate(end),
+      priorities: pri.slice(0, 6), morePriorities: Math.max(0, pri.length - 6), days: days, deadlines: deadlines, overdue: overdue, training: training,
+      counts: { inprogress: inProgress, meetings: meetings, deadlines: deadlines.length, overdue: overdue.length },
+      empty: !pri.length && !meetings && !deadlines.length && !overdue.length && !days.some(function (d) { return d.items.length; })
+    };
+  };
+
+  // "3 tasks in progress · 2 meetings and events · 4 deadlines" (parts with nothing in them are left out)
+  Hub.weekAheadCounts = function (w) {
+    var c = w.counts, out = [];
+    if (c.inprogress) out.push(Hub.plural(c.inprogress, "task in progress", "tasks in progress"));
+    if (c.meetings) out.push(Hub.plural(c.meetings, "meeting or event", "meetings and events"));
+    if (c.deadlines) out.push(Hub.plural(c.deadlines, "deadline", "deadlines"));
+    if (c.overdue) out.push(c.overdue + " overdue");
+    return out.join(" · ");
+  };
+
+  // Plain text version of the overview, for copying or an email.
+  Hub.weekAheadText = function (w) {
+    var L = [];
+    L.push("Week ahead: " + w.rangeLabel + (w.programmeWeek ? " (week " + w.programmeWeek.week + " of " + w.programmeWeek.total + ")" : ""));
+    var counts = Hub.weekAheadCounts(w); if (counts) L.push(counts);
+    if (w.empty) { L.push("", "A quiet week. Nothing is planned yet."); }
+    if (w.priorities.length) {
+      L.push("", "PRIORITIES");
+      w.priorities.forEach(function (p, i) { L.push((i + 1) + ". " + p.title + " (" + p.reason + ")"); });
+      if (w.morePriorities) L.push("...and " + w.morePriorities + " more in the Graduate Hub");
+    }
+    var busy = w.days.filter(function (d) { return d.items.length; });
+    if (busy.length) {
+      L.push("", "MEETINGS AND EVENTS");
+      busy.forEach(function (d) {
+        L.push(d.label);
+        d.items.forEach(function (a) { L.push("- " + (a.time ? a.time + " " : "") + a.title + (a.where ? " (" + a.where + ")" : "") + (a.kind === "Learning" ? " [planned learning]" : "")); });
+      });
+    }
+    if (w.deadlines.length) { L.push("", "DEADLINES"); w.deadlines.forEach(function (a) { L.push("- " + Hub.shortDate(a.date) + ": " + a.title); }); }
+    if (w.overdue.length) { L.push("", "OVERDUE"); w.overdue.forEach(function (a) { L.push("- " + a.title + " (was due " + Hub.shortDate(a.date) + ")"); }); }
+    var tl = Hub.trainingLine(w); if (tl) L.push("", "TRAINING", "- " + tl);
+    return L.join("\n");
+  };
+
+  // One line about required training (training modules are not listed as priorities).
+  Hub.trainingLine = function (w) {
+    var t = w.training || { overdue: 0, dueThisWeek: 0 }, bits = [];
+    if (t.overdue) bits.push(Hub.plural(t.overdue, "required training module is", "required training modules are") + " overdue");
+    if (t.dueThisWeek) bits.push(t.overdue ? t.dueThisWeek + " more due this week" : Hub.plural(t.dueThisWeek, "required training module is", "required training modules are") + " due this week");
+    return bits.length ? bits.join(", ") + " (see Learning)" : "";
+  };
+
+  // A mailto: link that opens the person's own email app with the overview filled in. Long text is trimmed (long addresses break some mail apps).
+  Hub.weekAheadMailto = function (w, to) {
+    var subject = "Week ahead: " + Hub.shortDate(w.start), note = "\n\nSee the full overview in the Graduate Hub.";
+    var lines = Hub.weekAheadText(w).split("\n"), body = lines.join("\r\n");
+    while (encodeURIComponent(body + note).length > 1400 && lines.length > 1) { lines.pop(); body = lines.join("\r\n"); }
+    var trimmed = lines.length < Hub.weekAheadText(w).split("\n").length;
+    return "mailto:" + (to ? encodeURIComponent(to).replace(/%40/g, "@") : "") + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body + (trimmed ? "\r\n..." : "") + note.replace(/\n/g, "\r\n"));
+  };
+
+  // A repeating Monday 08:30 reminder for the calendar (.ics), starting on the next Monday (today if it is Monday).
+  Hub.mondayReminderIcs = function () {
+    var today = S.today(), dow = S.parseDate(today).getDay(), first = S.addDays(today, (8 - dow) % 7), url = S.safeUrl((window.SITE_CONFIG || {}).hubUrl || "");
+    return Hub.buildIcs([{ uid: "week-ahead", date: first, time: "08:30", minutes: 15, title: "Graduate Hub: Your week ahead", description: "Open the Graduate Hub: Your week ahead" + (url ? "\n" + url : ""), alert: "PT0S", rrule: "FREQ=WEEKLY;BYDAY=MO", url: url }]);
+  };
+
+  // ----- progress summary: the file a graduate can choose to send to the programme team -----
+  // Only what the graduate ticks is included (goal titles, weekly updates, weekly goals, weekly reflections). Never included: 1:1 notes,
+  // feedback log, contacts, career interests, email address, achievements text. The programme team view (admin.html) reads this same shape.
+  Hub.SUMMARY_KIND = "graduate-hub-summary";
+  // The email draft address for the summary: the programme team address if set in config, otherwise the contact email.
+  Hub.summaryMailto = function (fileName) {
+    var cfg = window.SITE_CONFIG || {}, name = S.state.profile.name || "", to = cfg.programmeTeamEmail || cfg.contactEmail || "";
+    var body = "Hello,\r\n\r\nMy progress summary file is attached: " + fileName + "\r\n\r\n" + name;
+    return "mailto:" + to + "?subject=" + encodeURIComponent("Graduate Hub progress summary: " + name) + "&body=" + encodeURIComponent(body);
+  };
+  var MOOD_NAMES = ["", "Struggling", "Tough", "Okay", "Good", "Great"];
+  Hub.moodLabel = function (n) { return n > 0 && MOOD_NAMES[n] ? MOOD_NAMES[n] : ""; };
+  Hub.buildSummary = function (opts) {
+    opts = opts || {};
+    var st = S.state, p = st.profile, pl = S.programme(), sum = Hub.progressSummary(), cw = Hub.currentWeek();
+    var tasks = 0, tasksDone = 0, goalsDone = 0, wantUpd = !!(opts.updates || opts.update);
+    function weeks(map) { return Object.keys(map).map(Number).filter(function (n) { return n >= 1 && n <= 52; }).sort(function (a, b) { return a - b; }); }
+    function cut(t) { t = String(t || ""); return t.length > 2000 ? t.slice(0, 1999) + "\u2026" : t; }
+    st.goals.forEach(function (g) { var c = Hub.taskCounts(g); tasks += c.total; tasksDone += c.completed; if (Hub.goalStatus(g) === "done") goalsDone++; });
+    function part(key) { var x = sum.parts.filter(function (q) { return q.key === key; })[0]; return x && x.pct !== null ? Math.round(x.pct) : null; }
+    var out = {
+      kind: Hub.SUMMARY_KIND, version: 1, generated: S.today(),
+      graduate: { name: p.name, role: p.role },
+      programme: { start: pl.startDate || "", end: pl.endDate || "", status: pl.status, week: pl.status === "during" ? pl.week : pl.status === "after" ? pl.totalWeeks : 0, totalWeeks: pl.totalWeeks, pct: pl.pct || 0 },
+      progress: { overall: sum.overall, goals: part("goals"), milestones: part("milestones"), training: part("training") },
+      counts: { goals: st.goals.length, goalsDone: goalsDone, tasks: tasks, tasksDone: tasksDone, overdue: Hub.reminders().filter(function (r) { return r.kind === "danger"; }).length },
+      shared: { goals: !!opts.goals, update: wantUpd, updates: wantUpd, weeklyGoals: !!opts.weeklyGoals, reflections: !!opts.reflections }
+    };
+    if (opts.goals) out.goals = st.goals.map(function (g) { var c = Hub.taskCounts(g); return { title: g.title, status: Hub.goalStatus(g), target: g.target, tasksDone: c.completed, tasksTotal: c.total }; });
+    if (wantUpd) {
+      var up = st.updates[String(cw.week)];
+      out.update = up && (up.mood || up.note) ? { week: cw.week, mood: up.mood, note: up.note, updated: up.updated } : null;
+      out.updates = weeks(st.updates).map(function (w) { var u = st.updates[String(w)]; return { week: w, mood: u.mood, note: u.note, updated: u.updated }; });
+    }
+    if (opts.weeklyGoals) out.weeklyGoals = weeks(st.weeklyGoals).map(function (w) { return { week: w, goals: st.weeklyGoals[String(w)].map(function (g) { return { text: g.text, done: g.done }; }) }; });
+    if (opts.reflections) out.reflections = weeks(st.reflections).map(function (w) { var r = st.reflections[String(w)]; return { week: w, learnt: cut(r.learnt), wentWell: cut(r.wentWell), hard: cut(r.hard), focusNext: cut(r.focusNext), updated: r.updated }; });
+    return out;
+  };
+
+  // ----- goals set by the programme team (a "goals file" the head of programme sends; the graduate chooses to import it) -----
+  Hub.GOALS_KIND = "graduate-hub-goals";
+  var GOAL_TYPES = ["development", "career", "placement"], REF_RE = /^[A-Za-z0-9_-]{1,60}$/;
+  function isPlain(x) { return x !== null && typeof x === "object" && !Array.isArray(x); }
+  function cut(x, n) { return typeof x === "string" ? x.slice(0, n) : ""; }
+  // Cleans a list of goals { id, type, title, description, target, tasks: [{ id, text }] }. Anything invalid is dropped.
+  Hub.cleanProgGoals = function (list) {
+    var seen = {}, out = [];
+    (Array.isArray(list) ? list.slice(0, 100) : []).forEach(function (g) {
+      if (!isPlain(g) || !REF_RE.test(cut(g.id, 60)) || seen["g:" + g.id]) return;
+      var title = cut(g.title, 200).trim(); if (!title) return;
+      var tseen = {}, tasks = [];
+      (Array.isArray(g.tasks) ? g.tasks.slice(0, 50) : []).forEach(function (t) {
+        if (!isPlain(t) || !REF_RE.test(cut(t.id, 60)) || tseen["t:" + t.id]) return;
+        var text = cut(t.text, 200).trim(); if (!text) return;
+        tseen["t:" + t.id] = true; tasks.push({ id: t.id, text: text });
+      });
+      seen["g:" + g.id] = true;
+      out.push({ id: g.id, type: GOAL_TYPES.indexOf(g.type) !== -1 ? g.type : "development", title: title, description: cut(g.description, 2000).trim(), target: S.dateStr(g.target), tasks: tasks });
+    });
+    return out;
+  };
+  // Checks a goals file. Returns { error } or { value: { generated, forName, goals } }.
+  Hub.cleanGoalsFile = function (raw) {
+    if (!isPlain(raw)) return { error: "This is not a goals file." };
+    if (raw.kind !== Hub.GOALS_KIND) return { error: "This is not a Graduate Hub goals file." };
+    if (raw.version !== 1) return { error: "This goals file was made by a different version of the hub, so it cannot be read." };
+    var generated = S.dateStr(raw.generated); if (!generated) return { error: "The goals file has no valid date." };
+    var goals = Hub.cleanProgGoals(raw.goals);
+    if (!goals.length) return { error: "The goals file has no goals in it." };
+    return { value: { generated: generated, forName: cut(isPlain(raw.for) ? raw.for.name : "", 120).trim(), goals: goals } };
+  };
+  // Works out what importing would do, without changing anything: { added, updated, unchanged }.
+  Hub.planGoalsImport = function (value) {
+    var plan = { added: [], updated: [], unchanged: [] };
+    value.goals.forEach(function (pg) {
+      var mine = S.state.goals.filter(function (g) { return g.setBy === "programme" && g.refId === pg.id; })[0];
+      if (!mine) { plan.added.push(pg); return; }
+      var changes = [];
+      if (mine.title !== pg.title) changes.push("title");
+      if ((mine.description || "") !== pg.description) changes.push("details");
+      if ((mine.target || "") !== pg.target) changes.push("target date");
+      if (mine.type !== pg.type) changes.push("type");
+      var have = {}; (mine.tasks || []).forEach(function (t) { if (t.refId) have["t:" + t.refId] = t; });
+      var fresh = pg.tasks.filter(function (t) { return !have["t:" + t.id]; }), renamed = pg.tasks.filter(function (t) { return have["t:" + t.id] && have["t:" + t.id].text !== t.text; });
+      if (fresh.length) changes.push(Hub.plural(fresh.length, "new task", "new tasks"));
+      if (renamed.length) changes.push(Hub.plural(renamed.length, "task renamed", "tasks renamed"));
+      (changes.length ? plan.updated : plan.unchanged).push({ goal: pg, mine: mine, changes: changes });
+    });
+    return plan;
+  };
+  // Makes the changes. The graduate's own task statuses, comments and extra tasks are never overwritten or removed.
+  Hub.applyGoalsImport = function (plan) {
+    plan.added.forEach(function (pg) {
+      S.state.goals.push({ id: S.id(), type: pg.type, title: pg.title, description: pg.description, target: pg.target, progress: 0, created: S.today(), setBy: "programme", refId: pg.id,
+        tasks: pg.tasks.map(function (t) { return { id: S.id(), text: t.text, status: "notstarted", comments: [], refId: t.id }; }) });
+    });
+    plan.updated.forEach(function (u) {
+      var g = u.mine, pg = u.goal;
+      g.title = pg.title; g.description = pg.description; g.target = pg.target; g.type = pg.type;
+      var have = {}; (g.tasks || []).forEach(function (t) { if (t.refId) have["t:" + t.refId] = t; });
+      pg.tasks.forEach(function (t) {
+        if (have["t:" + t.id]) have["t:" + t.id].text = t.text;
+        else { g.tasks = g.tasks || []; g.tasks.push({ id: S.id(), text: t.text, status: "notstarted", comments: [], refId: t.id }); }
+      });
+    });
+  };
+
+  // ----- programme updates: announcements and events from the programme team (a file the head sends; the graduate chooses to import it) -----
+  Hub.UPDATE_KIND = "graduate-hub-update";
+  Hub.cleanProgAnnouncements = function (list) {
+    var seen = {}, out = [];
+    (Array.isArray(list) ? list.slice(0, 100) : []).forEach(function (a) {
+      if (!isPlain(a) || !REF_RE.test(cut(a.id, 60)) || seen["a:" + a.id]) return;
+      var title = cut(a.title, 200).trim(); if (!title) return;
+      seen["a:" + a.id] = true;
+      out.push({ id: a.id, title: title, text: cut(a.text, 1000).trim(), posted: S.dateStr(a.posted), until: S.dateStr(a.until) });
+    });
+    return out;
+  };
+  Hub.cleanProgEvents = function (list) {
+    var seen = {}, out = [];
+    (Array.isArray(list) ? list.slice(0, 200) : []).forEach(function (e) {
+      if (!isPlain(e) || !REF_RE.test(cut(e.id, 60)) || seen["e:" + e.id]) return;
+      var title = cut(e.title, 200).trim(), date = S.dateStr(e.date); if (!title || !date) return;
+      seen["e:" + e.id] = true;
+      out.push({ id: e.id, title: title, date: date, time: typeof e.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(e.time) ? e.time : "", where: cut(e.where, 200).trim(), note: cut(e.note, 1000).trim() });
+    });
+    return out;
+  };
+  // Checks a programme update file. Returns { error } or { value: { generated, announcements, events } }.
+  Hub.cleanUpdateFile = function (raw) {
+    if (!isPlain(raw)) return { error: "This is not a programme update file." };
+    if (raw.kind !== Hub.UPDATE_KIND) return { error: "This is not a Graduate Hub programme update file." };
+    if (raw.version !== 1) return { error: "This file was made by a different version of the hub, so it cannot be read." };
+    var generated = S.dateStr(raw.generated); if (!generated) return { error: "The file has no valid date." };
+    var ann = Hub.cleanProgAnnouncements(raw.announcements), ev = Hub.cleanProgEvents(raw.events);
+    if (!ann.length && !ev.length) return { error: "The file has no announcements or events in it." };
+    return { value: { generated: generated, announcements: ann, events: ev } };
+  };
+  // Works out what importing would do, without changing anything.
+  Hub.planUpdateImport = function (value) {
+    var plan = { annNew: [], annUpd: [], annSame: [], evNew: [], evUpd: [], evSame: [] };
+    value.announcements.forEach(function (pa) {
+      var mine = S.state.announcements.filter(function (a) { return a.refId === pa.id; })[0];
+      if (!mine) plan.annNew.push(pa);
+      else if (mine.title !== pa.title || mine.text !== pa.text || (mine.until || "") !== pa.until) plan.annUpd.push({ item: pa, mine: mine });
+      else plan.annSame.push(pa);
+    });
+    value.events.forEach(function (pe) {
+      var mine = S.state.calendar.filter(function (c) { return c.setBy === "programme" && c.refId === pe.id; })[0];
+      if (!mine) plan.evNew.push(pe);
+      else if (mine.title !== pe.title || mine.date !== pe.date || (mine.time || "") !== pe.time || (mine.where || "") !== pe.where || (mine.note || "") !== pe.note) plan.evUpd.push({ item: pe, mine: mine });
+      else plan.evSame.push(pe);
+    });
+    return plan;
+  };
+  Hub.applyUpdateImport = function (plan, generated) {
+    plan.annNew.forEach(function (pa) { S.state.announcements.push({ id: S.id(), refId: pa.id, title: pa.title, text: pa.text, posted: pa.posted || generated || S.today(), until: pa.until, read: false }); });
+    plan.annUpd.forEach(function (u) { u.mine.title = u.item.title; u.mine.text = u.item.text; u.mine.until = u.item.until; u.mine.read = false; });
+    plan.evNew.forEach(function (pe) { S.state.calendar.push({ id: S.id(), title: pe.title, date: pe.date, time: pe.time, where: pe.where, note: pe.note, setBy: "programme", refId: pe.id }); });
+    plan.evUpd.forEach(function (u) { var c = u.mine; c.title = u.item.title; c.date = u.item.date; c.time = u.item.time; c.where = u.item.where; c.note = u.item.note; });
+  };
+  // Announcements that are still showing (not past their "show until" date), newest first.
+  Hub.activeAnnouncements = function () {
+    var today = S.today();
+    return S.state.announcements.filter(function (a) { return !a.until || a.until >= today; }).sort(function (a, b) { return (b.posted || "") < (a.posted || "") ? -1 : (b.posted || "") > (a.posted || "") ? 1 : 0; });
+  };
+
+  // ----- calendar files (.ics) -----
+  function icsEscape(s) { return String(s).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n"); }
+  function fold(line) { var out = [], l = line; while (l.length > 74) { out.push(l.slice(0, 74)); l = " " + l.slice(74); } out.push(l); return out.join("\r\n"); }
+  function stamp() { return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  // events: [{ uid, date: "YYYY-MM-DD", time?: "HH:MM", minutes?, title, description?, location?, alert? }].
+  // Without a time the event is all day. alert is an ICS duration such as "-P3D" ("PT0S" = at the start); default 1 day before (all day) or 1 hour before.
+  // rrule (for example "FREQ=WEEKLY;BYDAY=MO") makes the event repeat; url is a web address shown with the event.
+  Hub.buildIcs = function (events) {
+    var lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Graduate Hub//EN", "CALSCALE:GREGORIAN"];
+    events.forEach(function (e) {
+      var timed = /^([01]\d|2[0-3]):[0-5]\d$/.test(e.time || "");
+      lines.push("BEGIN:VEVENT", "UID:" + e.uid + "@graduate-hub", "DTSTAMP:" + stamp());
+      if (timed) {
+        var p = S.parseDate(e.date), end = new Date(p.getFullYear(), p.getMonth(), p.getDate(), parseInt(e.time.slice(0, 2), 10), parseInt(e.time.slice(3), 10) + (e.minutes || 60));
+        lines.push("DTSTART:" + e.date.replace(/-/g, "") + "T" + e.time.replace(":", "") + "00",
+          "DTEND:" + end.getFullYear() + pad(end.getMonth() + 1) + pad(end.getDate()) + "T" + pad(end.getHours()) + pad(end.getMinutes()) + "00");
+      } else {
+        lines.push("DTSTART;VALUE=DATE:" + e.date.replace(/-/g, ""), "DTEND;VALUE=DATE:" + S.addDays(e.date, 1).replace(/-/g, ""));
+      }
+      if (e.rrule) lines.push("RRULE:" + e.rrule);
+      lines.push("SUMMARY:" + icsEscape(e.title));
+      if (e.url) lines.push("URL:" + e.url);
+      if (e.location) lines.push("LOCATION:" + icsEscape(e.location));
+      lines.push("DESCRIPTION:" + icsEscape(e.description || ""),
+        "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:" + icsEscape(e.title), "TRIGGER:" + (e.alert || (timed ? "-PT1H" : "-P1D")), "END:VALARM", "END:VEVENT");
+    });
+    lines.push("END:VCALENDAR");
+    return lines.map(fold).join("\r\n") + "\r\n";
+  };
+
+  window.Hub = Hub;
+})();
