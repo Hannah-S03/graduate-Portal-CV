@@ -26,7 +26,7 @@ Everything graduates enter is saved **only in their own browser**. There is no s
 | `src/data/links.js` | The fixed Quick links (these are `example.com` samples) |
 | `src/data/team.js` | Key contact role cards (names and emails are blank) |
 | `src/data/resources.js` | The Key information buttons (add folder addresses) |
-| `src/data/placement.js`, `content.js`, `overview.js` | The programme details, objectives, FAQs and skills |
+| `src/data/placement.js`, `content.js`, `overview.js` | The programme details, FAQs and skills |
 | `src/data/learning.js` | Required training and the courses list |
 | `assets/logo-white.svg`, `assets/icon.svg` | The placeholder logo and browser-tab icon |
 | `assets/site.css` | Colours and style (the values at the top of the file) |

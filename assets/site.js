@@ -187,17 +187,6 @@
     t.appendChild(g);
   };
 
-  R.objectives = function (t) {
-    t.appendChild(el("h3", { text: "What the scheme is for" }));
-    var ol = el("ol");
-    (CONTENT.programmeObjectives || []).forEach(function (o) { ol.appendChild(el("li", { text: o })); });
-    t.appendChild(ol);
-    t.appendChild(el("h3", { text: "By week 12, you will be able to" }));
-    var ul = el("ul");
-    (CONTENT.graduateObjectives || []).forEach(function (o) { ul.appendChild(el("li", { text: o })); });
-    t.appendChild(ul);
-  };
-
   R.overview = function (t) {
     if (OVERVIEW.lead) t.appendChild(el("p", { text: OVERVIEW.lead }));
     (OVERVIEW.groups || []).forEach(function (g) {

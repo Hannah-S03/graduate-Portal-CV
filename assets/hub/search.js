@@ -45,7 +45,6 @@
     });
     var K = window.SITE_CONTENT || {};
     (K.faqs || []).forEach(function (f) { add("Company and help", f.q, [f.a], f.a, "help.html"); });
-    (K.programmeObjectives || []).concat(K.graduateObjectives || []).forEach(function (o) { add("Company and help", "Programme objective", [o], o, "company.html#placement"); });
     return out;
   }
 

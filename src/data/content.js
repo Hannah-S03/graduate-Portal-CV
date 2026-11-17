@@ -1,18 +1,5 @@
-// Sample scheme objectives and graduate FAQs. Replace with your own wording.
+// Sample graduate FAQs. Replace with your own wording.
 window.SITE_CONTENT = {
-  programmeObjectives: [
-    "Give graduates exposure to a range of areas within the team so they can find what interests them most.",
-    "Produce real, useful work across those areas.",
-    "Provide practical exposure to how a professional business operates, combining structured learning with meaningful real-world experience.",
-    "Give every graduate a mentor and regular structured feedback."
-  ],
-  graduateObjectives: [
-    "Deliver scoped work in a new area within a short time frame.",
-    "Adapt quickly: learn new tools, people and ways of working as you move between areas.",
-    "Communicate with different audiences, in writing and in person.",
-    "Compare areas of work and make a reasoned choice about your next step.",
-    "Keep a reflection log that evidences your progress."
-  ],
   faqs: [
     { q: "Where is my information stored?", a: "Only in this browser, on this device. Nothing you enter is sent to a server, to the programme team or to your manager. See the privacy notice." },
     { q: "Will I lose my information if I use another computer or browser?", a: "Yes. The hub saves to the browser you use, so another browser or device starts empty. Use Download my data (on My profile) to take a copy, and Restore from file to load it somewhere else." },
